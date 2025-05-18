@@ -22,6 +22,7 @@ int monitor_inchis = 0;
 int monitor_pornit = 0;
 char comanda[512];
 char *dir_principal="treasure_hunt";
+int pfd[2];
 // luate din treasure_manager
 typedef struct {
     int id;
@@ -249,6 +250,44 @@ void handler_hub(int sig) {
     write(1,mesaj,strlen(mesaj));
 }
 
+void calculator_de_scor(char *hunt){
+  int pdf[2];
+  if(pipe(pdf)<0){
+    char *eroare="Eroare la pipe.\n";
+    write(1,eroare,strlen(eroare));
+    return;
+  }
+
+  int pid;
+  if((pid=fork())<0)
+    {
+      char *eroare="Eroare la fork.\n";
+      write(1,eroare,strlen(eroare));
+      return;
+    }
+  if(pid==0)
+    {
+      close(pdf[0]); //inchiderm citire;
+      dup2(pdf[1],1);//redirectam scrierea la stdout;
+      close(pdf[1]);//inchidem citirea;
+      execl("./calculat_scor","calculat_scor",hunt,NULL);
+      char *eroare="Eroare la execl.\n";
+      write(1,eroare,strlen(eroare));
+      exit(1);
+    }
+  else
+    {
+      close(pdf[1]);
+      char buffer[512];
+      int size_buffer;
+      while((size_buffer=read(pdf[0],buffer,sizeof(buffer)))>0){
+	write(1,buffer,size_buffer);
+      }
+      close(pdf[0]);
+      waitpid(pid,NULL,0); //asteapta copilul
+    }
+}
+
 int main() {
 
     struct sigaction sa;
@@ -262,7 +301,7 @@ int main() {
 
     char *mesaj_de_bun_venit="Bine ai venit la treasure hub!\n";
     write(1,mesaj_de_bun_venit,strlen(mesaj_de_bun_venit));
-    char *meniu="Alege din optiunile: start monitor | list hunts | list treasures <huntid> | view treasure <huntid> <comoaraid> | stop monitor | exit\n";
+    char *meniu="Alege din optiunile: start monitor | list hunts | list treasures <huntid> | view treasure <huntid> <comoaraid> |  stop monitor | exit | calculate_score <huntid> \n";
     write(1,meniu,strlen(meniu));
     
     while (inca_merge) {
@@ -271,12 +310,29 @@ int main() {
 	char *mesaj="Monitorul se opreste...\n";
 	write(1,mesaj,strlen(mesaj));
       }
-
+      	
         printf("[Hub]: ");
 	fflush(stdout);
 	
         if (read(0, comanda_input, sizeof(comanda_input)) <= 0) continue;
         comanda_input[strcspn(comanda_input,"\n")]=0;
+
+	if(strncmp(comanda_input, "calculate_score", 15) == 0){
+	  
+	  char hunt[16];
+	  char *p=strtok(comanda_input," ");
+	  p=strtok(NULL, " ");
+	  if(p){
+	    strcpy(hunt,p);
+	    calculator_de_scor(hunt);
+	  }
+	  else
+	    {
+	      char *mesaj="Format corect: calculate_score <huntid>\n";
+	       write(1,mesaj,strlen(mesaj));
+	    }
+	}
+
 	
 	if (strcmp(comanda_input, "exit") == 0) {
             if (monitor_pornit) {
@@ -288,7 +344,7 @@ int main() {
             }
 	}
 
-	if(monitor_pornit==0 && strcmp(comanda_input, "start monitor") != 0)
+	if(monitor_pornit==0 && strcmp(comanda_input, "start monitor") != 0 && strncmp(comanda_input, "calculate_score", 15) != 0)
 	{
 	  char *mesaj="Monitorul nu e pornit deci nu se pot efectua operatii.\n";
 	  write(1,mesaj,strlen(mesaj));
@@ -302,8 +358,18 @@ int main() {
 	      write(1,mesaj,strlen(mesaj));
               continue;
             }
+        if (pipe(pfd) < 0) 
+          {
+             char *eroare_pipe = "Eroare la crearea pipe-ului.\n";
+	     write(1, eroare_pipe, strlen(eroare_pipe));
+	     exit(-1);
+	  }
             pid_t pid = fork();
             if (pid == 0) {
+	       close(pfd[0]); 
+	       dup2(pfd[1], 1);
+	       close(pfd[1]);
+
                 struct sigaction sa;
                 sa.sa_handler = handle_monitor;
                 sigemptyset(&sa.sa_mask);
@@ -344,6 +410,12 @@ int main() {
 	        scrie_comanda(buffer);
 	        kill(monitor_pid, SIGUSR1);
 		sleep(1);
+		char buf[1024];
+                ssize_t nbytes = read(pfd[0], buf, sizeof(buf));
+                if (nbytes > 0)
+                  {
+                  write(1, buf, nbytes); // Afisez datele primite de la monitor
+                  }
             } else {
                 printf("Format corect: list treasures <hunt>\n");
             }
@@ -381,6 +453,12 @@ int main() {
                 scrie_comanda(buffer);
 		kill(monitor_pid, SIGUSR1);
 		sleep(1);
+		char buf[1024];
+                ssize_t nbytes = read(pfd[0], buf, sizeof(buf));
+                if (nbytes > 0)
+                  {
+                   write(1, buf, nbytes); // Afisez datele primite de la monitor
+                  }
             } else {
 	       char *mesaj="Format corect: view treasure <hunt> <id>\n";
 	       write(1,mesaj,strlen(mesaj));
@@ -391,13 +469,24 @@ int main() {
             scrie_comanda("list_hunts");
 	    kill(monitor_pid, SIGUSR1);
 	    sleep(1);
+	    char buf[1024];
+            ssize_t nbytes = read(pfd[0], buf, sizeof(buf));
+            if (nbytes > 0)
+               {
+                  write(1, buf, nbytes); // Afisez datele primite de la monitor
+               }
         }
-
         else if (strcmp(comanda_input, "stop monitor") == 0) {
             if (monitor_pornit && !monitor_inchis) {
                 scrie_comanda("stop_monitor");
                 kill(monitor_pid, SIGUSR1);
 		sleep(1);
+		char buf[1024];
+                ssize_t nbytes = read(pfd[0], buf, sizeof(buf));
+                if (nbytes > 0)
+                 {
+                   write(1, buf, nbytes); // Afisez datele primite de la monitor
+                 }
                 monitor_inchis = 1;
             } else {
 	       char *mesaj="!MONITORUL E DEJA OPRIT!\n";
@@ -405,15 +494,15 @@ int main() {
             }
         }
 
-        else if(strcmp(comanda_input,"exit")!=0) {
+        else if(strcmp(comanda_input,"exit")!=0 && strncmp(comanda_input, "calculate_score", 15) != 0) {
 	  char *mesaj="!COMANDA NCUNOSCUTA.\n";
 	  write(1,mesaj,strlen(mesaj));
         }
 
-	
     }
-    
-    char *mesaj="A-ti iesit din treasure_hub.\n";
+
+  
+    char *mesaj="Ati iesit din treasure_hub.\n";
     write(1,mesaj,strlen(mesaj));
     return 0;
 }
